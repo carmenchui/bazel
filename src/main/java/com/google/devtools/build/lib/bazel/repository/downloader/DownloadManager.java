@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import com.google.auth.Credentials;
+import com.google.common.base.CharMatcher;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
@@ -43,6 +44,7 @@ import java.net.SocketException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -380,7 +382,9 @@ public class DownloadManager {
   }
 
   private boolean isRetryableException(Throwable e) {
-    return e instanceof ContentLengthMismatchException || e instanceof SocketException;
+    return e instanceof ContentLengthMismatchException
+        || e instanceof SocketException
+        || e instanceof UnknownHostException;
   }
 
   /**
@@ -500,6 +504,15 @@ public class DownloadManager {
     return message.toString();
   }
 
+  // The complement of a conservative range of characters that are valid for all reasonable file
+  // systems.
+  private static final CharMatcher FS_UNSAFE_CHARS =
+      CharMatcher.inRange('a', 'z')
+          .or(CharMatcher.inRange('A', 'Z'))
+          .or(CharMatcher.inRange('0', '9'))
+          .or(CharMatcher.anyOf(".-_"))
+          .negate();
+
   private Path getDownloadDestination(URL url, Optional<String> type, Path output) {
     if (!type.isPresent()) {
       return output;
@@ -513,7 +526,9 @@ public class DownloadManager {
         basename += suffix;
       }
     }
-    return output.getRelative(basename);
+    // The basename may contain characters that aren't legal in a path with all file systems. Those
+    // characters won't matter for type determination.
+    return output.getRelative(FS_UNSAFE_CHARS.replaceFrom(basename, '_'));
   }
 
   /**

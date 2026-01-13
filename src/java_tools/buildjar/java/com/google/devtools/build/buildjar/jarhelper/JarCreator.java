@@ -14,10 +14,11 @@
 
 package com.google.devtools.build.buildjar.jarhelper;
 
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.FileVisitResult;
@@ -38,15 +39,85 @@ import java.util.jar.Manifest;
  */
 public class JarCreator extends JarHelper {
 
+  /** A source of bytes to be added to a Jar file. */
+  protected interface JarEntrySource {
+    byte[] bytes() throws IOException;
+
+    int size() throws IOException;
+
+    boolean isDirectory() throws IOException;
+
+    void copyTo(JarOutputStream out) throws IOException;
+
+    boolean exists() throws IOException;
+  }
+
+  private record PathJarEntrySource(Path path) implements JarEntrySource {
+    @Override
+    public boolean isDirectory() {
+      return Files.isDirectory(path);
+    }
+
+    @Override
+    public int size() throws IOException {
+      return (int) Files.size(path);
+    }
+
+    @Override
+    public byte[] bytes() throws IOException {
+      return Files.readAllBytes(path);
+    }
+
+    @Override
+    public void copyTo(JarOutputStream out) throws IOException {
+      Files.copy(path, out);
+    }
+
+    @Override
+    public boolean exists() {
+      return Files.exists(path);
+    }
+  }
+
+  private record ByteArrayJarEntrySource(@SuppressWarnings("ArrayRecordComponent") byte[] bytes)
+      implements JarEntrySource {
+    @Override
+    public boolean isDirectory() {
+      return false;
+    }
+
+    @Override
+    public int size() {
+      return bytes.length;
+    }
+
+    @Override
+    public byte[] bytes() {
+      return bytes;
+    }
+
+    @Override
+    public void copyTo(JarOutputStream out) throws IOException {
+      out.write(bytes);
+    }
+
+    @Override
+    public boolean exists() {
+      return true;
+    }
+  }
+
   // Map from Jar entry names to files. Use TreeMap so we can establish a canonical order for the
   // entries regardless in what order they get added.
-  private final TreeMap<String, Path> jarEntries = new TreeMap<>();
-  private String manifestFile;
+  private final TreeMap<String, JarEntrySource> jarEntries = new TreeMap<>();
+  private Path manifestPath;
   private String mainClass;
   private String targetLabel;
   private String injectingRuleKind;
 
-  /** @deprecated use {@link JarCreator(Path)} instead */
+  /**
+   * @deprecated use {@link JarCreator(Path)} instead
+   */
   @Deprecated
   public JarCreator(String fileName) {
     this(Paths.get(fileName));
@@ -56,14 +127,7 @@ public class JarCreator extends JarHelper {
     super(path);
   }
 
-  /**
-   * Adds an entry to the Jar file, normalizing the name.
-   *
-   * @param entryName the name of the entry in the Jar file
-   * @param path the path of the input for the entry
-   * @return true iff a new entry was added
-   */
-  public boolean addEntry(String entryName, Path path) {
+  private boolean addEntry(String entryName, JarEntrySource source) {
     if (entryName.startsWith("/")) {
       entryName = entryName.substring(1);
     } else if (entryName.length() >= 3
@@ -76,7 +140,31 @@ public class JarCreator extends JarHelper {
     } else if (entryName.startsWith("./")) {
       entryName = entryName.substring(2);
     }
-    return jarEntries.put(entryName, path) == null;
+    return jarEntries.put(entryName, source) == null;
+  }
+
+  /**
+   * Adds an entry to the Jar file, normalizing the name.
+   *
+   * @param entryName the name of the entry in the Jar file
+   * @param path the path of the input for the entry
+   * @return true iff a new entry was added
+   */
+  @CanIgnoreReturnValue
+  public boolean addEntry(String entryName, Path path) {
+    return addEntry(entryName, new PathJarEntrySource(path));
+  }
+
+  /**
+   * Adds an entry to the Jar file, normalizing the name.
+   *
+   * @param entryName the name of the entry in the Jar file
+   * @param bytes the content for the entry
+   * @return true iff a new entry was added
+   */
+  @CanIgnoreReturnValue
+  public boolean addEntry(String entryName, byte[] bytes) {
+    return addEntry(entryName, new ByteArrayJarEntrySource(bytes));
   }
 
   /**
@@ -86,11 +174,14 @@ public class JarCreator extends JarHelper {
    * @param fileName the name of the input file for the entry
    * @return true iff a new entry was added
    */
+  @CanIgnoreReturnValue
   public boolean addEntry(String entryName, String fileName) {
     return addEntry(entryName, Paths.get(fileName));
   }
 
-  /** @deprecated prefer {@link #addDirectory(Path)} */
+  /**
+   * @deprecated prefer {@link #addDirectory(Path)}
+   */
   @Deprecated
   public void addDirectory(String directory) {
     addDirectory(Paths.get(directory));
@@ -143,7 +234,7 @@ public class JarCreator extends JarHelper {
               if (isDirectory) {
                 sb.append('/');
               }
-              jarEntries.put(sb.toString(), path);
+              jarEntries.put(sb.toString(), new PathJarEntrySource(path));
             }
           });
     } catch (IOException e) {
@@ -170,15 +261,15 @@ public class JarCreator extends JarHelper {
    * Sets filename for the manifest content. If this is set the manifest will be read from this file
    * otherwise the manifest content will get generated on the fly.
    *
-   * @param manifestFile the filename of the manifest file.
+   * @param manifestPath the filename of the manifest file.
    */
-  public void setManifestFile(String manifestFile) {
-    this.manifestFile = manifestFile;
+  public void setManifestPath(Path manifestPath) {
+    this.manifestPath = manifestPath;
   }
 
   private byte[] manifestContent() throws IOException {
-    if (manifestFile != null) {
-      try (FileInputStream in = new FileInputStream(manifestFile)) {
+    if (manifestPath != null) {
+      try (InputStream in = Files.newInputStream(manifestPath)) {
         return manifestContentImpl(new Manifest(in));
       }
     } else {
@@ -223,7 +314,7 @@ public class JarCreator extends JarHelper {
       // Create the manifest entry in the Jar file
       writeManifestEntry(out, manifestContent());
 
-      for (Map.Entry<String, Path> entry : jarEntries.entrySet()) {
+      for (Map.Entry<String, JarEntrySource> entry : jarEntries.entrySet()) {
         copyEntry(out, entry.getKey(), entry.getValue());
       }
     }
@@ -241,7 +332,6 @@ public class JarCreator extends JarHelper {
       createJar.addDirectory(args[i]);
     }
     createJar.setCompression(true);
-    createJar.setNormalize(true);
     createJar.setVerbose(true);
     long start = System.currentTimeMillis();
     try {

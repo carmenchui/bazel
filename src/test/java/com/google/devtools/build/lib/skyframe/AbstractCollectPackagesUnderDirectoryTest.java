@@ -318,6 +318,7 @@ public abstract class AbstractCollectPackagesUnderDirectoryTest {
                 getExtraSkyFunctions(),
                 SyscallCache.NO_CACHE,
                 /* allowExternalRepositories= */ false,
+                /* repoContentsCachePathSupplier= */ () -> null,
                 SkyframeExecutor.SkyKeyStateReceiver.NULL_INSTANCE,
                 BugReporter.defaultInstance());
     skyframeExecutor.injectExtraPrecomputedValues(
@@ -339,7 +340,6 @@ public abstract class AbstractCollectPackagesUnderDirectoryTest {
         pathPackageLocator,
         UUID.randomUUID(),
         /* clientEnv= */ ImmutableMap.of(),
-        /* repoEnvOption= */ ImmutableMap.of(),
         new TimestampGranularityMonitor(BlazeClock.instance()),
         QuiescingExecutorsImpl.forTesting(),
         FakeOptions.builder().put(packageOptions).put(options).build(),

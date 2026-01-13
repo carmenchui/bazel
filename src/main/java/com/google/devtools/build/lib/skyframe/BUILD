@@ -113,7 +113,6 @@ java_library(
         ":cached_bzl_load_value_and_deps",
         ":cached_bzl_load_value_and_deps_builder_factory",
         ":client_environment_function",
-        ":client_environment_value",
         ":collect_packages_under_directory_function",
         ":collect_packages_under_directory_value",
         ":collect_targets_in_package_function",
@@ -133,6 +132,7 @@ java_library(
         ":directory_listing_function",
         ":directory_listing_state_value",
         ":directory_tree_digest_function",
+        ":environment_variable_value",
         ":ephemeral_check_if_output_consumed",
         ":exclusive_test_build_driver_value",
         ":execution_finished_event",
@@ -177,6 +177,7 @@ java_library(
         ":recursive_package_provider_backed_target_pattern_resolver",
         ":recursive_pkg_function",
         ":recursive_pkg_value",
+        ":repo_environment_function",
         ":repo_file_function",
         ":repo_package_args_function",
         ":repository_mapping_function",
@@ -224,7 +225,6 @@ java_library(
         ":workspace_info_receiver",
         ":workspace_status_function",
         ":workspace_status_value",
-        "//src/main/java/com/google/devtools/build/lib:baseline-cl-diff-event",
         "//src/main/java/com/google/devtools/build/lib:build-request-options",
         "//src/main/java/com/google/devtools/build/lib:keep-going-option",
         "//src/main/java/com/google/devtools/build/lib:keep-state-after-build-option",
@@ -296,7 +296,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis/platform:platform_function",
         "//src/main/java/com/google/devtools/build/lib/analysis/producers",
         "//src/main/java/com/google/devtools/build/lib/analysis/producers:unloaded_toolchain_contexts_inputs",
-        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:exception",
         "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:resolution",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository:repo_definition_function",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository:repo_definition_value",
@@ -446,7 +445,7 @@ java_library(
     srcs = ["ActionEnvironmentFunction.java"],
     deps = [
         ":client_environment_function",
-        ":client_environment_value",
+        ":environment_variable_value",
         ":precomputed_value",
         ":sky_functions",
         "//src/main/java/com/google/devtools/build/lib/bugreport",
@@ -1048,7 +1047,7 @@ java_library(
     name = "client_environment_function",
     srcs = ["ClientEnvironmentFunction.java"],
     deps = [
-        ":client_environment_value",
+        ":environment_variable_value",
         ":sky_functions",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization:visible-for-serialization",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
@@ -1058,9 +1057,10 @@ java_library(
 )
 
 java_library(
-    name = "client_environment_value",
-    srcs = ["ClientEnvironmentValue.java"],
+    name = "environment_variable_value",
+    srcs = ["EnvironmentVariableValue.java"],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//third_party:jsr305",
     ],
@@ -1395,6 +1395,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//src/main/java/com/google/devtools/common/options",
         "//third_party:auto_value",
         "//third_party:flogger",
@@ -2563,6 +2564,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/actions:fileset_output_tree",
+        "//src/main/java/com/google/devtools/build/lib/actions:important_output_handler",
         "//src/main/java/com/google/devtools/build/lib/actions:package_roots",
         "//src/main/java/com/google/devtools/build/lib/actions:thread_state_receiver",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:core_options",
@@ -2574,7 +2576,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/exec:execution_options",
         "//src/main/java/com/google/devtools/build/lib/profiler",
-        "//src/main/java/com/google/devtools/build/lib/remote/options",
         "//src/main/java/com/google/devtools/build/lib/util:crash_failure_details",
         "//src/main/java/com/google/devtools/build/lib/util:detailed_exit_code",
         "//src/main/java/com/google/devtools/build/lib/util/io",
@@ -3279,7 +3280,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent:thread_safety",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization:deserialized-sky-value",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization:visible-for-serialization",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//third_party:error_prone_annotations",
         "//third_party:guava",
@@ -3352,5 +3352,20 @@ java_library(
     deps = [
         ":fs_events_native_deps_service",
         "//src/main/java/com/google/devtools/build/lib/jni",
+    ],
+)
+
+java_library(
+    name = "repo_environment_function",
+    srcs = ["RepoEnvironmentFunction.java"],
+    deps = [
+        ":environment_variable_value",
+        ":precomputed_value",
+        ":sky_functions",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization:visible-for-serialization",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party:guava",
+        "//third_party:jsr305",
     ],
 )

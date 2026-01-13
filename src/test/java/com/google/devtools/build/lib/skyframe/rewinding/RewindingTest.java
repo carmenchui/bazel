@@ -83,6 +83,7 @@ public final class RewindingTest extends BuildIntegrationTestCase {
   protected void setupOptions() throws Exception {
     super.setupOptions();
     addOptions(
+        "--enable_runfiles",
         "--spawn_strategy=standalone",
         "--noexperimental_merged_skyframe_analysis_execution",
         "--rewind_lost_inputs",
@@ -283,6 +284,11 @@ public final class RewindingTest extends BuildIntegrationTestCase {
   public void discoveredCppModuleLost() throws Exception {
     skipIfBazel();
     helper.runDiscoveredCppModuleLost();
+  }
+
+  @Test
+  public void multipleLostInputsWithSameDigest_rewoundTogether() throws Exception {
+    helper.runMultipleLostInputsWithSameDigest_rewoundTogether();
   }
 
   @Test

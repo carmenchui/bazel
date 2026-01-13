@@ -22,11 +22,11 @@ import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
-import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Set;
+import javax.annotation.Nullable;
 
 /**
  * An interface for a remote caching protocol.
@@ -99,12 +99,15 @@ public interface RemoteCacheClient extends MissingDigestsFinder {
    * as late as possible and close the blob as soon as they are done with it.
    */
   @FunctionalInterface
-  interface Blob extends Closeable {
+  interface Blob {
     /** Get an input stream for the blob's data. Can be called multiple times. */
     InputStream get() throws IOException;
 
-    @Override
-    default void close() {}
+    /** An optional human-readable description of the blob's source. */
+    @Nullable
+    default String description() {
+      return null;
+    }
   }
 
   /**
@@ -117,7 +120,20 @@ public interface RemoteCacheClient extends MissingDigestsFinder {
    */
   default ListenableFuture<Void> uploadFile(
       RemoteActionExecutionContext context, Digest digest, Path file) {
-    return uploadBlob(context, digest, () -> new LazyFileInputStream(file));
+    return uploadBlob(
+        context,
+        digest,
+        new Blob() {
+          @Override
+          public InputStream get() {
+            return new LazyFileInputStream(file);
+          }
+
+          @Override
+          public String description() {
+            return "file " + file;
+          }
+        });
   }
 
   /**

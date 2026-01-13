@@ -84,7 +84,6 @@ import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
-import com.google.devtools.build.lib.runtime.CommonCommandOptions;
 import com.google.devtools.build.lib.runtime.InfoItem;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
 import com.google.devtools.build.lib.runtime.RemoteRepoContentsCache;
@@ -132,9 +131,9 @@ public class BazelRepositoryModule extends BlazeModule {
       ImmutableMap.of();
 
   private final RepositoryCache repositoryCache = new RepositoryCache();
-  private final MutableSupplier<Map<String, String>> repoEnvironmentSupplier =
+  private final MutableSupplier<ImmutableMap<String, String>> repoEnvSupplier =
       new MutableSupplier<>();
-  private final MutableSupplier<Map<String, String>> clientEnvironmentSupplier =
+  private final MutableSupplier<ImmutableMap<String, String>> nonstrictRepoEnvSupplier =
       new MutableSupplier<>();
   private boolean fetchDisabled = false;
   private ImmutableMap<String, PathFragment> overrides = ImmutableMap.of();
@@ -158,9 +157,9 @@ public class BazelRepositoryModule extends BlazeModule {
   private RepoSpecFunction repoSpecFunction;
   private YankedVersionsFunction yankedVersionsFunction;
 
-  private final VendorCommand vendorCommand = new VendorCommand(clientEnvironmentSupplier);
+  private final VendorCommand vendorCommand = new VendorCommand(nonstrictRepoEnvSupplier);
   private final RegistryFactoryImpl registryFactory =
-      new RegistryFactoryImpl(clientEnvironmentSupplier);
+      new RegistryFactoryImpl(nonstrictRepoEnvSupplier);
 
   @Nullable private CredentialModule credentialModule;
 
@@ -208,20 +207,17 @@ public class BazelRepositoryModule extends BlazeModule {
   @Override
   public void workspaceInit(
       BlazeRuntime runtime, BlazeDirectories directories, WorkspaceBuilder builder) {
-    // TODO(b/27143724): Remove this guard when Google-internal flavor no longer uses repositories.
-    if ("bazel".equals(runtime.getProductName())) {
-      builder.allowExternalRepositories(true);
-    }
+    builder.allowExternalRepositories(true);
+    builder.setRepoContentsCachePathSupplier(repositoryCache.getRepoContentsCache()::getPath);
 
     repositoryFetchFunction =
         new RepositoryFetchFunction(
-            repoEnvironmentSupplier,
-            clientEnvironmentSupplier,
+            repoEnvSupplier,
+            nonstrictRepoEnvSupplier,
             directories,
             repositoryCache.getRepoContentsCache());
     singleExtensionEvalFunction =
-        new SingleExtensionEvalFunction(
-            directories, repoEnvironmentSupplier, clientEnvironmentSupplier);
+        new SingleExtensionEvalFunction(directories, repoEnvSupplier, nonstrictRepoEnvSupplier);
 
     if (builtinModules == null) {
       builtinModules = ModuleFileFunction.getBuiltinModules();
@@ -284,13 +280,8 @@ public class BazelRepositoryModule extends BlazeModule {
     this.yankedVersionsFunction.setDownloadManager(downloadManager);
     this.vendorCommand.setDownloadManager(downloadManager);
 
-    CommonCommandOptions commandOptions = env.getOptions().getOptions(CommonCommandOptions.class);
-    if (commandOptions.useStrictRepoEnv) {
-      repoEnvironmentSupplier.set(env.getRepoEnvFromOptions());
-    } else {
-      repoEnvironmentSupplier.set(env.getRepoEnv());
-    }
-    clientEnvironmentSupplier.set(env.getRepoEnv());
+    repoEnvSupplier.set(env.getRepoEnv());
+    nonstrictRepoEnvSupplier.set(env.getNonstrictRepoEnv());
     PackageOptions pkgOptions = env.getOptions().getOptions(PackageOptions.class);
     fetchDisabled = pkgOptions != null && !pkgOptions.fetch;
 
@@ -690,10 +681,18 @@ public class BazelRepositoryModule extends BlazeModule {
    */
   @Nullable
   private Path toPath(PathFragment path, CommandEnvironment env) {
-    if (path.isEmpty() || env.getBlazeWorkspace().getWorkspace() == null) {
+    if (path.isEmpty() || env.getDirectories().getWorkspace() == null) {
       return null;
     }
-    return env.getBlazeWorkspace().getWorkspace().getRelative(path);
+    // It is important to use getWorkspace() here, not getWorkingDirectory(). Both Paths have the
+    // same underlying PathFragment, but may differ in their FileSystem if the remote repo contents
+    // cache is in use. getWorkspace() uses the same FileSystem as everything other than the
+    // workspace directory, while getWorkingDirectory() uses the workspace directory's FileSystem.
+    // Even though the users of the returned Path may end up writing to it, they are not expected to
+    // update source files within the workspace. Thus, the correct FileSystem is the one from
+    // getWorkspace(), which e.g. allows moves from the external directory under the output base to
+    // the local repo contents cache without crossing FileSystems.
+    return env.getDirectories().getWorkspace().getRelative(path);
   }
 
   @Override
@@ -717,6 +716,7 @@ public class BazelRepositoryModule extends BlazeModule {
       lastRegistryInvalidation = now;
     }
     return ImmutableList.of(
+        PrecomputedValue.injected(PrecomputedValue.REPO_ENV, repoEnvSupplier.get()),
         PrecomputedValue.injected(RepoDefinitionFunction.REPOSITORY_OVERRIDES, overrides),
         PrecomputedValue.injected(ModuleFileFunction.INJECTED_REPOSITORIES, injections),
         PrecomputedValue.injected(ModuleFileFunction.MODULE_OVERRIDES, moduleOverrides),

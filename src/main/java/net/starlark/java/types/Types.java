@@ -39,16 +39,25 @@ public final class Types {
   // TODO(ilist@): constructed types should probably be interned. In some cases it might help
   // to precompute and memoize StarlarkTypes.getSupertypes.
 
-  // Internal type used as a guard for a missing type annotations (for now).
+  /**
+   * The Dynamic type of gradual typing; compatible with any other type, but not related by
+   * subtyping to any other type.
+   */
   public static final StarlarkType ANY = new Any();
+
+  /** The top type of the type hierarchy. */
+  public static final StarlarkType OBJECT = new ObjectType();
+
+  /** The bottom type of the type hierarchy. */
+  public static final StarlarkType NEVER = new NeverType();
 
   // Primitive types
   public static final StarlarkType NONE = new None();
+
   public static final StarlarkType BOOL = new Bool();
   public static final StarlarkType INT = new Int();
   public static final StarlarkType FLOAT = new FloatType();
   public static final StarlarkType STR = new Str();
-  public static final StarlarkType OBJECT = new ObjectType();
 
   // A frequently used function without parameters, that returns Any.
   public static final CallableType NO_PARAMS_CALLABLE =
@@ -61,6 +70,8 @@ public final class Types {
   private static ImmutableMap<String, Object> makeTypeUniverse() {
     ImmutableMap.Builder<String, Object> env = ImmutableMap.builder();
     env //
+        .put("Any", ANY)
+        .put("object", OBJECT)
         .put("None", NONE)
         .put("bool", BOOL)
         .put("int", INT)
@@ -109,6 +120,23 @@ public final class Types {
     @Override
     public boolean equals(Object obj) {
       return obj instanceof ObjectType;
+    }
+  }
+
+  private static final class NeverType extends StarlarkType {
+    @Override
+    public String toString() {
+      return "Never";
+    }
+
+    @Override
+    public int hashCode() {
+      return NeverType.class.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return obj instanceof NeverType;
     }
   }
 
@@ -176,7 +204,7 @@ public final class Types {
 
     @Override
     public boolean equals(Object obj) {
-      return obj instanceof Float;
+      return obj instanceof FloatType;
     }
   }
 
@@ -362,6 +390,8 @@ public final class Types {
   }
 
   /** Constructs a union type. */
+  // TODO: #28043 - Seems more appropriate to use List<StarlarkType> for the param and let this
+  // factory method take care of deduplication. For the moment we have a convenience overload below.
   public static StarlarkType union(ImmutableSet<StarlarkType> types) {
     ImmutableSet.Builder<StarlarkType> subtypesBuilder = ImmutableSet.builder();
     // Unions are flattened
@@ -379,9 +409,13 @@ public final class Types {
     if (subtypes.size() == 1) {
       return subtypes.iterator().next();
     } else if (subtypes.isEmpty()) {
-      throw new IllegalArgumentException("Empty union!");
+      return Types.NEVER;
     }
     return new AutoValue_Types_UnionType(subtypes);
+  }
+
+  public static StarlarkType union(List<StarlarkType> types) {
+    return union(ImmutableSet.copyOf(types));
   }
 
   /**

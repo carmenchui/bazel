@@ -315,7 +315,7 @@ JAVA_VERSIONS_COVERAGE = ("11", "17", "21")
             "@bazel_tools//tools/bash/runfiles",
         ],
         exec_compatible_with = ["//:highcpu_machine"],
-        shard_count = 2,
+        shard_count = 4,
         tags = [
             "requires-network",  # For Bzlmod
         ],
@@ -1262,17 +1262,6 @@ sh_test(
 )
 
 sh_test(
-    name = "rule_test_test",
-    size = "medium",
-    srcs = ["rule_test_test.sh"],
-    data = [
-        ":test-deps",
-        "@bazel_tools//tools/bash/runfiles",
-    ],
-    shard_count = 2,
-)
-
-sh_test(
     name = "help_test",
     size = "small",
     srcs = ["help_test.sh"],
@@ -1422,16 +1411,6 @@ sh_test(
     name = "platforms_test",
     srcs = ["platforms_test.sh"],
     data = [":test-deps"],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
-)
-
-sh_test(
-    name = "resource_compiler_toolchain_test",
-    srcs = ["resource_compiler_toolchain_test.sh"],
-    data = [
-        ":test-deps",
-        "//src/main/res:srcs_for_testing",
-    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 

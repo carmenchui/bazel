@@ -103,11 +103,6 @@ public class StandaloneTestStrategy extends TestStrategy {
   public TestRunnerSpawn createTestRunnerSpawn(
       TestRunnerAction action, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
-    if (action.getExecutionSettings().getInputManifest() == null) {
-      throw createTestExecException(
-          TestAction.Code.LOCAL_TEST_PREREQ_UNMET,
-          "cannot run local tests with --nobuild_runfile_manifests");
-    }
     Map<String, String> testEnvironment =
         createEnvironment(actionExecutionContext, action, tmpDirRoot);
 
@@ -704,23 +699,23 @@ public class StandaloneTestStrategy extends TestStrategy {
     // Do not override a more informative test failure with a generic failure due to the missing
     // shard file, which may have been caused by the test failing before the runner had a chance to
     // touch the file
-    if (testResultDataBuilder.getTestPassed() && testAction.isSharded()) {
-      if (testAction.checkShardingSupport()
-          && !actionExecutionContext
-              .getPathResolver()
-              .convertPath(resolvedPaths.getTestShard())
-              .exists()) {
-        TestExecException e =
-            createTestExecException(
-                TestAction.Code.LOCAL_TEST_PREREQ_UNMET,
-                "Sharding requested, but the test runner did not advertise support for it by "
-                    + "touching TEST_SHARD_STATUS_FILE. Either remove the 'shard_count' attribute, "
-                    + "use a test runner that supports sharding or temporarily disable this check "
-                    + "via --noincompatible_check_sharding_support.");
-        closeSuppressed(e, streamed);
-        closeSuppressed(e, fileOutErr);
-        throw e;
-      }
+    if (testResultDataBuilder.getTestPassed()
+        && testAction.isSharded()
+        && !actionExecutionContext
+            .getPathResolver()
+            .convertPath(resolvedPaths.getTestShard())
+            .exists()) {
+      TestExecException e =
+          createTestExecException(
+              TestAction.Code.LOCAL_TEST_PREREQ_UNMET,
+              """
+              Sharding requested, but the test runner did not advertise support for it by touching \
+              TEST_SHARD_STATUS_FILE. Either remove the 'shard_count' attribute or use a test \
+              runner that supports sharding.\
+              """);
+      closeSuppressed(e, streamed);
+      closeSuppressed(e, fileOutErr);
+      throw e;
     }
 
     // SpawnActionContext guarantees the first entry to correspond to the spawn passed in (there

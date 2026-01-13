@@ -42,8 +42,6 @@ import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.StarlarkValue;
 import net.starlark.java.eval.Tuple;
 
-// LINT.IfChange
-
 /** A configuration containing flags required for Apple platforms and tools. */
 @Immutable
 @RequiresOptions(options = {AppleCommandLineOptions.class})
@@ -90,6 +88,7 @@ public class AppleConfiguration extends Fragment implements AppleConfigurationAp
   private final DottedVersion watchosMinimumOsFlag;
   private final boolean preferMutualXcode;
   private final boolean includeXcodeExecRequirements;
+  private final boolean disableAppleFragment;
 
   public AppleConfiguration(BuildOptions buildOptions) {
     AppleCommandLineOptions options = buildOptions.get(AppleCommandLineOptions.class);
@@ -113,6 +112,7 @@ public class AppleConfiguration extends Fragment implements AppleConfigurationAp
     this.watchosMinimumOsFlag = DottedVersion.maybeUnwrap(options.watchosMinimumOs);
     this.preferMutualXcode = options.preferMutualXcode;
     this.includeXcodeExecRequirements = options.includeXcodeExecutionRequirements;
+    this.disableAppleFragment = options.disableAppleFragment;
   }
 
   /** A class that contains information pertaining to Apple CPUs. */
@@ -168,6 +168,11 @@ public class AppleConfiguration extends Fragment implements AppleConfigurationAp
     abstract ImmutableList<String> macosCpus();
 
     abstract ImmutableList<String> catalystCpus();
+  }
+
+  @Override
+  public boolean shouldInclude() {
+    return !disableAppleFragment;
   }
 
   @Override
@@ -404,5 +409,4 @@ public class AppleConfiguration extends Fragment implements AppleConfigurationAp
       return fileSystemName;
     }
   }
-  // LINT.ThenChange(//src/main/starlark/builtins_bzl/common/objc/apple_configuration.bzl)
 }

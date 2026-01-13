@@ -1113,8 +1113,11 @@ sh_test(
     srcs = ['test.sh'],
 )
 EOF
-  bazel test --nobuild_runfile_manifests //dir:test >& $TEST_log && fail "should have failed"
-  expect_log "cannot run local tests with --nobuild_runfile_manifests"
+  bazel test --nobuild_runfile_manifests --spawn_strategy=local --test_output=errors //dir:test >& $TEST_log && fail "should have failed"
+  expect_log "ERROR: RUNFILES_DIR does not exist. This can happen when using --nobuild_runfile_manifests with local execution."
+  bazel test --nobuild_runfile_manifests --spawn_strategy=standalone --test_output=errors //dir:test >& $TEST_log && fail "should have failed"
+  expect_log "ERROR: RUNFILES_DIR does not exist. This can happen when using --nobuild_runfile_manifests with local execution."
+  bazel test --nobuild_runfile_manifests --spawn_strategy=sandboxed //dir:test >& $TEST_log || fail "should have succeeded"
 }
 
 function test_test_with_reserved_env_variable() {
@@ -1200,15 +1203,11 @@ EOF
   touch x.sh
   chmod +x x.sh
 
-  bazel test \
-      --incompatible_check_sharding_support \
-      //:x  &> $TEST_log && fail "expected failure"
+  bazel test //:x  &> $TEST_log && fail "expected failure"
   expect_log "Sharding requested, but the test runner did not advertise support for it by touching TEST_SHARD_STATUS_FILE."
 
   echo 'touch "$TEST_SHARD_STATUS_FILE"' > x.sh
-  bazel test \
-      --incompatible_check_sharding_support \
-      //:x  &> $TEST_log || fail "expected success"
+  bazel test //:x  &> $TEST_log || fail "expected success"
 }
 
 function test_premature_exit_file_checked() {

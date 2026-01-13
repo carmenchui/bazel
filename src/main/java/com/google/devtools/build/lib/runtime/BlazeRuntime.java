@@ -1714,6 +1714,10 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
       if (metricsModules == 0) {
         blazeModules.add(new DummyMetricsModule());
       }
+      var blazeServicesCopy = ImmutableList.copyOf(blazeServices);
+      for (BlazeModule module : blazeModules) {
+        module.blazeServicesAvailable(blazeServicesCopy);
+      }
       for (BlazeModule module : blazeModules) {
         module.blazeStartup(
             startupOptionsProvider,
@@ -1855,6 +1859,24 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     @CanIgnoreReturnValue
     public Builder addBlazeService(BlazeService blazeService) {
       blazeServices.add(blazeService);
+      return this;
+    }
+
+    @CanIgnoreReturnValue
+    public <T extends BlazeService> Builder overrideBlazeServiceForTesting(
+        Class<T> clazz, BlazeService blazeService) {
+      var index = -1;
+      for (var i = 0; i < blazeServices.size(); i++) {
+        if (clazz.isInstance(blazeServices.get(i))) {
+          index = i;
+          break;
+        }
+      }
+      if (index == -1) {
+        blazeServices.add(blazeService);
+      } else {
+        blazeServices.set(index, blazeService);
+      }
       return this;
     }
 

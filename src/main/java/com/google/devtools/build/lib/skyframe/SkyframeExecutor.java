@@ -119,7 +119,6 @@ import com.google.devtools.build.lib.analysis.platform.PlatformValue;
 import com.google.devtools.build.lib.analysis.producers.ConfiguredTargetAndDataProducer;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkAttributeTransitionProvider;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelDepGraphValue;
-import com.google.devtools.build.lib.bazel.bzlmod.ExternalDepsException;
 import com.google.devtools.build.lib.bazel.repository.RepoDefinitionFunction;
 import com.google.devtools.build.lib.bazel.repository.RepoDefinitionValue;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions;
@@ -197,6 +196,7 @@ import com.google.devtools.build.lib.skyframe.AspectKeyCreator.AspectKey;
 import com.google.devtools.build.lib.skyframe.AspectKeyCreator.TopLevelAspectsKey;
 import com.google.devtools.build.lib.skyframe.BuildDriverFunction.AdditionalPostAnalysisDepsRequestedAndAvailable;
 import com.google.devtools.build.lib.skyframe.BuildDriverFunction.TestTypeResolver;
+import com.google.devtools.build.lib.skyframe.DiffAwarenessManager.EvaluatingVersionDiff;
 import com.google.devtools.build.lib.skyframe.DiffAwarenessManager.ProcessableModifiedFileSet;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.ExternalDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.FileDirtinessChecker;
@@ -542,7 +542,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
 
   private final AtomicInteger analysisCount = new AtomicInteger();
 
-  private final Optional<DiffCheckNotificationOptions> diffCheckNotificationOptions;
+  protected final Optional<DiffCheckNotificationOptions> diffCheckNotificationOptions;
 
   private boolean isCleanBuild = true;
 
@@ -689,6 +689,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       @Nullable WorkspaceInfoFromDiffReceiver workspaceInfoFromDiffReceiver,
       @Nullable RecordingDifferencer recordingDiffer,
       boolean allowExternalRepositories,
+      Supplier<Path> repoContentsCachePathSupplier,
       boolean globUnderSingleDep,
       Optional<DiffCheckNotificationOptions> diffCheckNotificationOptions) {
     // Strictly speaking, these arguments are not required for initialization, but all current
@@ -734,7 +735,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     this.skyframeBuildView =
         new SkyframeBuildView(artifactFactory, this, ruleClassProvider, actionKeyContext);
     this.externalFilesHelper =
-        ExternalFilesHelper.create(pkgLocator, externalFileAction, directories);
+        ExternalFilesHelper.create(
+            pkgLocator, externalFileAction, directories, repoContentsCachePathSupplier);
     this.crossRepositoryLabelViolationStrategy = crossRepositoryLabelViolationStrategy;
     this.buildFilesByPriority = buildFilesByPriority;
     this.actionOnIOExceptionReadingBuildFile = actionOnIOExceptionReadingBuildFile;
@@ -768,6 +770,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(SkyFunctions.PRECOMPUTED, new PrecomputedFunction());
     map.put(SkyFunctions.CLIENT_ENVIRONMENT_VARIABLE, new ClientEnvironmentFunction(clientEnv));
     map.put(SkyFunctions.ACTION_ENVIRONMENT_VARIABLE, new ActionEnvironmentFunction());
+    map.put(SkyFunctions.REPOSITORY_ENVIRONMENT_VARIABLE, new RepoEnvironmentFunction());
     map.put(FileStateKey.FILE_STATE, newFileStateFunction());
     map.put(SkyFunctions.DIRECTORY_LISTING_STATE, newDirectoryListingStateFunction());
     map.put(FileSymlinkCycleUniquenessFunction.NAME, new FileSymlinkCycleUniquenessFunction());
@@ -1018,9 +1021,14 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   public void configureActionExecutor(
       InputMetadataProvider fileCache,
       ActionInputPrefetcher actionInputPrefetcher,
-      String actionExecutionSalt) {
+      String actionExecutionSalt,
+      int maxStdoutErrBytes) {
     skyframeActionExecutor.configure(
-        fileCache, actionInputPrefetcher, DiscoveredModulesPruner.DEFAULT, actionExecutionSalt);
+        fileCache,
+        actionInputPrefetcher,
+        DiscoveredModulesPruner.DEFAULT,
+        actionExecutionSalt,
+        maxStdoutErrBytes);
   }
 
   @ForOverride
@@ -2093,21 +2101,21 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       Map.Entry<SkyKey, ErrorInfo> firstError = Iterables.get(evalResult.errorMap().entrySet(), 0);
       ErrorInfo error = firstError.getValue();
       Throwable e = error.getException();
-      // Wrap loading failed exceptions
-      if (e != null && e instanceof NoSuchThingException noSuchThingException) {
-        e = new InvalidConfigurationException(noSuchThingException.getDetailedExitCode(), e);
-      } else if (e != null && e instanceof ExternalDepsException externalDepsException) {
-        e = new InvalidConfigurationException(externalDepsException.getDetailedExitCode(), e);
-      } else if (e == null && !error.getCycleInfo().isEmpty()) {
-        cyclesReporter.reportCycles(error.getCycleInfo(), firstError.getKey(), eventHandler);
-        e =
-            new InvalidConfigurationException(
+      switch (e) {
+        case InvalidConfigurationException invalidConfigurationException ->
+            throw invalidConfigurationException;
+        case DetailedException detailedException ->
+            throw new InvalidConfigurationException(detailedException.getDetailedExitCode(), e);
+        case null, default -> {
+          if (e == null && !error.getCycleInfo().isEmpty()) {
+            cyclesReporter.reportCycles(error.getCycleInfo(), firstError.getKey(), eventHandler);
+            throw new InvalidConfigurationException(
                 "cannot load build configuration because of this cycle", Code.CYCLE);
+          }
+          throw new IllegalStateException(
+              "Unknown error during configuration creation evaluation", e);
+        }
       }
-      if (e != null) {
-        Throwables.throwIfInstanceOf(e, InvalidConfigurationException.class);
-      }
-      throw new IllegalStateException("Unknown error during configuration creation evaluation", e);
     }
 
     // Prepare and return the results.
@@ -2933,7 +2941,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       PathPackageLocator pathPackageLocator,
       UUID commandId,
       Map<String, String> clientEnv,
-      Map<String, String> repoEnvOption,
       TimestampGranularityMonitor tsgm,
       QuiescingExecutors executors,
       OptionsProvider options,
@@ -2943,7 +2950,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     getActionEnvFromOptions(options.getOptions(CoreOptions.class));
     var platformOptions = options.getOptions(PlatformOptions.class);
     platformMappingKey = platformOptions != null ? platformOptions.platformMappingKey : null;
-    PrecomputedValue.REPO_ENV.set(injectable(), new LinkedHashMap<>(repoEnvOption));
     RemoteOptions remoteOptions = options.getOptions(RemoteOptions.class);
     setRemoteExecutionEnabled(remoteOptions != null && remoteOptions.isRemoteExecutionEnabled());
     cpuBoundSemaphore.set(getUpdatedSkyFunctionsSemaphore(options));
@@ -3621,6 +3627,11 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
           }
 
           @Override
+          public ImmutableMap<String, Object> getOnLeaveScopeValues() {
+            return ImmutableMap.of();
+          }
+
+          @Override
           public ImmutableMap<String, Object> getExplicitStarlarkOptions(
               java.util.function.Predicate<? super ParsedOptionDescription> filter) {
             return ImmutableMap.of();
@@ -3670,8 +3681,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         }
 
         DiffAwarenessManager.ProcessableModifiedFileSet modifiedFileSet =
-            diffAwarenessManager.getDiff(
-                eventHandler, getPathForModifiedFileSet(pathEntry), ignoredPaths, options);
+            diffAwarenessManager.getDiff(eventHandler, pathEntry, ignoredPaths, options);
         if (pkgRoots.size() == 1) {
           workspaceInfo = modifiedFileSet.getWorkspaceInfo();
           workspaceInfoFromDiffReceiver.syncWorkspaceInfoFromDiff(
@@ -3727,12 +3737,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return workspaceInfo;
   }
 
-  /** Returns the path under which to find the modified file set. */
-  @ForOverride
-  protected Root getPathForModifiedFileSet(Root root) {
-    return root;
-  }
-
   /** Invalidates entries in the client environment. */
   private void handleClientEnvironmentChanges() {
     // Remove deleted client environmental variables.
@@ -3749,7 +3753,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     for (Map.Entry<String, String> entry : clientEnv.get().entrySet()) {
       newValuesBuilder.put(
           ClientEnvironmentFunction.key(entry.getKey()),
-          Delta.justNew(new ClientEnvironmentValue(entry.getValue())));
+          Delta.justNew(new EnvironmentVariableValue(entry.getValue())));
     }
     recordingDiffer.inject(newValuesBuilder.buildOrThrow());
   }
@@ -3849,6 +3853,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       }
       ExternalDirtinessChecker externalDirtinessChecker = null;
       if (!fileTypesToCheck.isEmpty()) {
+        // FileType.REPO_CONTENTS_CACHE_DIRS is intentionally never checked here. See the comment on
+        // that enum constant for details.
         externalDirtinessChecker =
             new ExternalDirtinessChecker(tmpExternalFilesHelper, fileTypesToCheck);
         dirtinessCheckers =
@@ -4738,8 +4744,19 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return Multisets.copyHighestCountFirst(counts);
   }
 
-  /** Defines configuration for the progress message shown during a slow diff check. */
+  /**
+   * Defines configuration for the diff checking and the progress message shown during a slow diff
+   * check.
+   */
   public interface DiffCheckNotificationOptions {
+
+    /**
+     * Whether to allow a diff check for the given {@link EvaluatingVersionDiff}. A return of false
+     * results in starting with a fresh Skyframe graph instead of an incremental build.
+     */
+    boolean allowDiffCheck(
+        EvaluatingVersionDiff versionDiff, EventHandler eventHandler, OptionsProvider options);
+
     String getStatusMessage();
 
     Duration getStatusUpdateDelay();
